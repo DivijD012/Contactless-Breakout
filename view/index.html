@@ -1,0 +1,174 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta http-equiv="X-UA-Compatible" content="IE=edge">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <script src="https://cdn.plot.ly/plotly-latest.min.js"></script>
+    <title>Analysis</title>
+    <style>
+        body{
+            margin-top: 10vh;
+            background-color:rgb(245, 245, 245);
+        }
+        #container{
+            margin: auto;
+            width: 40%;
+            padding: 10px;
+        }
+        #vs{
+            font-size: larger;
+            font-family: Arial, Helvetica, sans-serif;
+            display: inline;
+        }
+        .dropdown{
+            padding: 10px;
+            padding-left: 20px;
+            padding-right: 40px;
+            font-size: large;
+            border-radius: 50px; 
+            margin: 40px;  
+        }
+        #loading{
+            display: none;
+            position: fixed;
+            top:0;
+            z-index: 100;
+            width: 100vw;
+            height: 100vh;
+            background-color: white;
+            margin: auto;
+        }
+        #id-input{
+
+            position: fixed;
+            top:0;
+            z-index: 100;
+            width: 100vw;
+            height: 100vh;
+            background-color: white;
+            margin: auto;
+        }
+        .remove-btn{
+            background-color: white;
+            border: 1px solid black;
+            padding: 10px;
+            margin: auto;
+            border-radius: 40px;
+        }
+    </style>
+</head>
+<body>
+    <div id="id-input">
+        <p>Enter game id</p>
+        <input id = "gameid" type="number" />
+        <button onclick="viewAnalysis()">Analyse</button>
+    </div>
+    <div id="loading">
+        <h1>
+            LOADING...
+        </h1>
+    </div>
+    <div id="container">
+        <select name="yaxis" id="yaxis" class="dropdown" onchange="update()">
+            <option value="1">Velocity</option>
+            <option value="2">Acceleration</option>
+            <option value="3">Time</option>
+            <option value="4">Ball Position</option>
+            <option value="5">My position </option>
+        </select>
+        <p id = "vs"> vs </p>
+        <select name="xaxis" id="xaxis" class="dropdown" onchange="update()">
+            <option value="1">Velocity</option>
+            <option value="2">Acceleration</option>
+            <option value="3">Time</option>
+            <option value="4">Ball Position</option>
+            <option value="5">My position </option>
+        </select>
+        <div id="chosen">
+           
+        </div>
+    </div>
+    <div id="myPlot"></div>
+    <script>
+        const numberOfData = 5;
+        var x = 0;
+        var y = 0;
+        var data = [
+                [50,60,70,80,90,100,110,120,130,140,150],
+                [50,60,70,45,90,100,110,120,130,140,150],
+                [50,100,70,80,90,99,110,120,130,140,150],
+                [70,60,50,80,90,100,119,120,130,140,150],
+                [50,60,70,80,128,100,100,155,130,140,150]
+        ]
+        var plottedYs = new Array(numberOfData);
+        var things = ["Velocity", "Acceleration", "Time", "Ball Position", "My position"];
+        //              0               1           2           3               4
+        for(let i = 0;i < numberOfData; i++)
+            plottedYs[i]  = 0;
+        function removebtn(id){
+            var toBeRemoved = document.getElementById(id);
+            toBeRemoved.parentElement.removeChild(toBeRemoved);
+            for(let i = 0; i < numberOfData; i++){
+                if(id.includes(things[i])){
+                    console.log(id);
+                    console.log(things[i]);
+                    console.log(i);
+                    plottedYs[i] = 0;
+                    break;
+                }
+            }
+            plot();
+        }
+        function update(){
+            x = document.getElementById("xaxis").value;
+            y = document.getElementById("yaxis").value;
+            
+            if(plottedYs[y-1] == 0){
+                var chosen = document.getElementById("chosen");
+                var btn = document.createElement("button");
+                btn.innerHTML = things[y-1] + " x";
+                btn.setAttribute("class", "remove-btn");
+                btn.setAttribute("id", things[y-1]+"-btn");
+                btn.setAttribute("onclick", "removebtn(this.id)");
+                chosen.appendChild(btn);
+                plottedYs[y-1] = 1;
+            }
+            plot();
+        }
+        function plot(){
+           
+            // Define Data
+            var plotData = [];
+            for(let i = 0; i < plottedYs.length; i++){
+                if(!plottedYs[i])continue;
+                plotData.push({
+                    x: data[x-1],
+                    y: data[i],
+                    mode:"lines",
+                    type:"scatter"
+                });
+            }
+            console.log(plotData.length);
+            // Define Layout
+            var layout = {
+                xaxis: {range: [40, 160], title: things[x-1]},
+                yaxis: {range: [40, 160], title: things[y-1]},
+                title: ""
+            };
+
+            Plotly.newPlot("myPlot", plotData, layout);
+        }
+        function viewAnalysis(){
+            document.getElementById("loading").style.display = "block";
+            document.getElementById("id-input").style.display = "none";
+            // GET request here
+            setTimeout(()=>{
+                document.getElementById("loading").style.display = "none";
+            }, 1000);
+        }
+        update();
+        plot();
+    </script>
+</body>
+</html>
