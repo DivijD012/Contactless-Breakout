@@ -1,0 +1,410 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta http-equiv="X-UA-Compatible" content="IE=edge">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <script src="https://cdn.plot.ly/plotly-latest.min.js"></script>
+
+    <title>BreakOut</title>
+    <style>
+        body{
+            margin: 0px;
+        }
+        /* #plot{
+            position: fixed;
+            height: 100px;
+            width: 200px;
+            opacity: 50%;
+        } */
+        #end{
+            display: none;
+            position: fixed;
+            height: 80vh;
+            top: 10vh;
+            width: 80vw;
+            left: 10vw;
+            background-color: white;  
+            border: 3px solid black;
+            padding: 20px;
+        }
+        #retry-button{
+            position: relative;
+            left: 38vw;
+            background-color: orange;
+            padding: 20px;
+            border: none;
+            color: white;
+            font-size: large;
+            border-radius: 60px;
+        }
+        #retry-button:hover{
+            cursor: pointer;
+        }
+    </style>
+</head>
+<body>
+    <canvas id="game" width="100" height="100"><h1>some error occured</h1></canvas>
+    <div id = "end">
+        <h1 id="score">Score: </h1>
+        <div id="plot"></div>
+        <div id="hash"></div>
+        <button onclick="window.location.reload()" id = "retry-button">Retry</button>
+    </div>
+    
+    <script>
+        alert('start')
+        // smoothing algorithm data 
+        dt = 0;
+        esp_data = -1;  // raw distance data from esp32
+        offset = 600;
+        cur_cursor_position = -1;
+        alpha = 0.3;
+        scale = 60;
+        no_in_queue = 1; // maximum number of data readings there can be in the queue
+        tolerance = 100;
+        still_tolerance = 20; // prevents jitter, humans cant hold smtg still precisely
+        motions = [];
+        var hash;
+        var mainGameLoop;
+        var mainDataLoop;
+        var scoreInc = 200; // by how much the score increments for each brick hit
+        const canvas = document.getElementById('game'); // initiates the canvas for the game
+        canvas.width = window.innerWidth-10;    // the whole screen is 
+        canvas.height = window.innerHeight-10;
+        /** @type {CanvasRenderingContext2D} */
+        const ctx = canvas.getContext('2d');
+        const MAX_BRICK_WIDTH = canvas.width/10;
+        const BRICK_PADDING  = 10;
+        const MAXVEL = 3;
+        const brickHeight = 35;
+        const paddleHeight = 20;
+        const paddleWidth = 200;
+        const ballRadius = 15;
+        const rowCount = 4;
+        const topPad = 200;
+        const coyote = 0;// extra distance from valid, to control difficulty
+
+        var gameStaus = true;
+        var ballY = canvas.height - 2 * ballRadius - 50;
+        var ballX = canvas.width/2;
+        var paddleX = canvas.width/2;
+        var prevPaddleX = canvas.width/2;
+        var vx = 0;
+        var vy = -10;
+        var friction = 0.05;
+        var randfact = 0;
+        var score = 0;
+        var maxScore = 0;
+        var noOfBricks = 0;
+
+
+        // data to be posted to om2m
+        var timedata = [];
+        var paddleXdata = [];
+        var ballXdata = [];
+
+        var timedataslow = [];
+        var paddleXdataslow = [];
+        var ballXdataslow = [];
+
+        var time = 0;
+        const colors = ['#fc2617'/*red*/ ,'#fca117' /*orange*/, '#fcf117' /*yellow*/, '#36ff4a' /*green*/]
+        // colors of layers of bricks
+
+        document.addEventListener("mousemove", mouseMoveHandler, false);
+        function makeid(length) {
+            var result           = '';
+            var characters       = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
+            var charactersLength = characters.length;
+            for ( var i = 0; i < length; i++ ) {
+                result += characters.charAt(Math.floor(Math.random() * charactersLength));
+            }
+            return result;
+        }
+
+        function mouseMoveHandler(e) {
+            var relativeX = e.clientX - canvas.offsetLeft;
+            if(relativeX > 0 && relativeX < canvas.width) {
+                paddleX = relativeX;
+            }
+        }
+        // sanity checks and end conditions
+        function checkPaddle(){
+            if(ballX > paddleX - paddleWidth/2 - coyote && ballX < paddleX + paddleWidth/2 + coyote){
+                if(ballY >= canvas.height - paddleHeight - ballRadius){
+                    // relx = vx - paddleVelocity;
+                    // rely = vy;
+                    vy = -1*Math.abs(vy);
+                    vx += (ballX - paddleX) * friction;
+                }
+            }
+        }
+        function plotVelocity(){// final graph
+            // Define Data
+            var data = [{
+                x:timedata,
+                y:paddleXdata,
+                mode:"lines"
+            },
+            {
+                x:timedata,
+                y:ballXdata,
+                mode:"lines"
+            },
+            ];
+            // Define Layout
+            var layout = {
+                xaxis: {range: [time[0], time[-1]], title: "Time"},
+                yaxis: {range: [0, 2000], title: "Velocity"},  
+                title: "Velocity vs. Time"
+            };
+
+            // Display using Plotly
+            Plotly.newPlot("plot", data, layout);
+        }
+        function checkDeath(){
+
+            if(ballY >= canvas.height - paddleHeight/2 || noOfBricks == 0){
+                clearInterval(mainGameLoop);
+                clearInterval(mainDataLoop);
+
+                var xhr = new XMLHttpRequest();
+
+                // try to stop game 7 times
+                for (let bruhgei = 0; bruhgei < 7; bruhgei++) {
+                    xhr.open('POST', 'http://192.168.0.29/gameend', true);
+                    xhr.send();
+                }
+
+                hash = makeid(40);
+                console.log(hash);
+
+                // location.reload();
+                gameStaus = false;
+                document.getElementById("end").style.display = "block";
+                document.getElementById("score").innerHTML = "Score: " + score; 
+                document.getElementById("hash").innerHTML = "ID: " + hash + "  <button onclick=\"copyHash()\">Copy</button>"; 
+                plotVelocity();
+
+                posturl = 'http://192.168.0.29/postdata?'
+                posturl += `gameid=${hash}&`;
+                posturl += `score=${score}&`;
+                posturl += `paddleXdata=${paddleXdataslow.join(',')}&`;
+                posturl += `ballXdata=${ballXdataslow.join(',')}&`;
+                posturl += `timedata=${timedataslow.join(',')}`;
+
+                console.log("LOOK HERE: " + posturl);
+
+                xhr.open('POST', posturl, true);
+                xhr.send();
+            }
+        }
+        function copyHash(){
+            navigator.clipboard.writeText(hash);
+        }
+        // Update funcs
+        function collisionDetection(){
+            checkPaddle();
+            for(let i = 0; i < rowCount; i++){
+                for(let j = 0; j < rows[i].length; j++){
+                    if(rows[i][j].isVisible != 1)continue;
+                    // if(ballX > rows[i][j].x - coyote && ballX < rows){}
+                    
+                    if(ballY + ballRadius >= rows[i][j].y && ballY - ballRadius  <= rows[i][j].y + rows[i][j].height){
+                        let val1 = ballX - ballRadius - rows[i][j].x;
+                        if(val1 <= rows[i][j].width && val1 >= 0){
+                            vx *= -1;
+                            vy += randfact*(Math.random()-0.5);
+                            rows[i][j].isVisible = 0;
+                        }
+                        if(ballX + ballRadius >= rows[i][j].x &&  ballX + ballRadius < rows[i][j].x + rows[i][j].width){
+                            vx *= -1;
+                            vy += randfact*(Math.random()-0.5);
+                            rows[i][j].isVisible = 0;
+                        }
+                    }
+                    if(ballX + ballRadius >= rows[i][j].x && ballX - ballRadius  <= rows[i][j].x + rows[i][j].width){
+                        let val1 = ballY - ballRadius - rows[i][j].y;
+                        if(ballY - ballRadius - rows[i][j].y <= rows[i][j].height && val1 >= 0){
+                            vy *= -1;
+                            vx += randfact*(Math.random()-0.5);
+                            rows[i][j].isVisible = 0;
+                        }
+                        if(ballY + ballRadius >= rows[i][j].y && ballY + ballRadius <= rows[i][j].y + rows[i][j].height){
+                            vy *= -1;
+                            vx += randfact*(Math.random()-0.5);
+                            rows[i][j].isVisible = 0;
+                        }
+                    }
+                    if(rows[i][j].isVisible == 0){
+                        score += scoreInc;
+                        noOfBricks--;
+                        return;
+                    }
+                }
+            }
+        }
+        function updateBallPosition(){
+            ballX += vx;
+            if(ballX >= canvas.width - ballRadius)vx = -1*Math.abs(vx);
+            if(ballX <= ballRadius) vx = Math.abs(vx);
+            ballY += vy;
+            if(ballY <= ballRadius)vy = Math.abs(vy);
+            if(vx > MAXVEL) vx = MAXVEL;
+            if(vx < -MAXVEL) vx = -MAXVEL;
+            if(vy > MAXVEL) vy = MAXVEL;
+            if(vy < -MAXVEL) vy = -MAXVEL;
+            paddleXdata.push(Math.abs(paddleX));
+            ballXdata.push(ballX);
+            prevPaddleX = paddleX;
+            timedata.push(time)
+            time += 1
+            // if(ballY >= canvas.height - ballRadius)vy *= -1;
+        }
+        // Creation and drawing
+        function makeBackground(){
+            ctx.fillStyle = '#f7f7f7';
+            ctx.fillRect(0, 0, canvas.width, canvas.height);
+            // console.log(canvas.height, canvas.width);
+        }
+        function createBrick(x, y, w, h){
+            return {x : x, y: y, height: h, width: w, isVisible: 1};
+        }
+
+        function createRow(y){
+            let bricks = []
+            let l = canvas.width;
+            while(l > MAX_BRICK_WIDTH){
+                let w = MAX_BRICK_WIDTH * (Math.random() * 0.7 + 0.3);
+                bricks.push(createBrick(l - w - BRICK_PADDING, y, w, brickHeight));
+                l -= w + BRICK_PADDING;
+                maxScore += scoreInc;
+                noOfBricks++;
+            }
+            bricks.push(createBrick(3, y, l - BRICK_PADDING, brickHeight));
+            maxScore += scoreInc;
+            noOfBricks++;
+            return bricks;
+        }
+        
+        // Make the rows
+        rows = []
+        for(let i = 0; i < rowCount; i++){
+                bricks = createRow(topPad + i * (brickHeight + BRICK_PADDING));
+                rows.push(bricks);
+        }
+        console.log(maxScore);
+        // Draw onto screen
+        function drawRow(){
+            for(let i = 0; i < rowCount; i++){
+                ctx.fillStyle = colors[i];
+                for(let brick of rows[i]){
+                    if(brick.isVisible == 0)continue;
+                    ctx.fillRect(brick.x, brick.y, brick.width, brick.height);
+                    // console.log(brick);
+                }
+            }
+        }
+        function drawPaddle(){
+            ctx.fillStyle = "#34b6ba";
+            ctx.fillRect(paddleX - paddleWidth/2, canvas.height-paddleHeight, paddleWidth, paddleHeight)
+        }
+        function drawBall(){
+            ctx.beginPath();
+            ctx.arc(ballX, ballY, ballRadius, 0, Math.PI*2);
+            ctx.fillStyle = "#ff0800";
+            ctx.fill();
+            ctx.closePath();
+        }
+        function drawScore(){
+            ctx.font = "30px Arial";
+            ctx.fillStyle = "#34b6ba";
+            ctx.fillText("Score:" + score, 10, 50, 100);
+            // ctx.fillText("score", 10, 10, 100);
+        }
+        mainGameLoop = setInterval(()=>{
+            dt++;
+            // Requesting data
+            var xhttp = new XMLHttpRequest();
+            // if we get a response then we do
+            xhttp.onreadystatechange = function() {
+                if (this.readyState == 4 && this.status == 200) {
+                // Typical action to be performed when the document is ready:
+                let resp = xhttp.responseText;
+
+                // 1. process data
+                if (esp_data != 0) {
+                    if (esp_data == -1) // data reading has not started yet
+                        esp_data = Number(resp);
+                    else
+                        esp_data = esp_data * (1 - alpha) + alpha * Number(resp);
+                        // interpolation of data, to make the experience smoother
+                        // The previous value influences the current so that real life
+                        // imperfections, eg: jitter dont make the experience bad
+                }
+
+                // 2. scale from real world distance to screen distance
+                motion_value = Math.round(esp_data * scale);
+
+                // 3. Add the scaled value queue
+                motions.push(motion_value);
+                
+                // 4. Process the queue once its full, (currently capacity is 1)
+                if (motions.length > no_in_queue) {
+                    new_position = motions.shift(); // get oldest data
+                    if (Math.abs(new_position - cur_cursor_position) >= still_tolerance) {
+                        // tween(cur_cursor_position, new_position); maybe later
+
+                        console.log((new_position - cur_cursor_position) / dt);
+                        dt = 0;
+                        // Call paddle move function, with offset (so that we dont smack into the sensor)
+                        mouseMoveHandler({clientX: Number(new_position) - offset});
+                        cur_cursor_position = new_position;
+                    }
+                }
+
+            }
+            };
+            xhttp.open("GET", "http://192.168.0.29/data.txt", true);
+            xhttp.send();
+ 
+        }, 1000/30); // get data 30 times per second, ie frame rate(for paddle) = 30
+
+        mainDataLoop = setInterval(() => {
+            paddleXdataslow.push(Math.abs(paddleX).toFixed(2));
+            ballXdataslow.push(ballX.toFixed(2));
+            timedataslow.push(time)
+        }, 1000/4);
+
+        // main game loop
+        function draw(){
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+            drawRow();            // Draw the bricks
+            drawPaddle();
+            drawBall();
+            checkDeath();         // Check if game over also includes win condition
+            collisionDetection(); // paddle collision  + brick collision
+            updateBallPosition(); // x += vx; y += vy;
+            if(gameStaus)         // if game is still running run game loop again
+                requestAnimationFrame(draw);
+            
+            drawScore();
+        }
+
+        // let renderLoop = setInterval(draw, 1000);
+        
+        // decrease score as time goes on
+        scoreInterval = setInterval(() => { scoreInc -= 5; }, 20 * 1000);
+
+        window.onload = function() {
+            draw();
+            let bruh = new XMLHttpRequest();
+
+            bruh.open("POST", "http://192.168.0.29/gamestart", true);
+            bruh.send();
+
+        };
+    </script>
+</body>
+</html>
